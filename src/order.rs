@@ -7,8 +7,8 @@ use crate::{
     database::Database,
     messages::{CommitVote, GetResult, MessageAccept, MessagePrepare},
     operations::Arguments,
+    repository::{find_max, repository},
     runtime::Runtime,
-    repository::{repository, find_max},
 };
 
 pub(crate) struct Order {

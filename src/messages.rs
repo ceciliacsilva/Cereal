@@ -7,14 +7,17 @@ use uuid::Uuid;
 
 #[derive(Message)]
 #[rtype(result = "Result<CommitVote, anyhow::Error>")]
-pub(crate) enum MessagePrepare {
+pub(crate) enum MessagePrepare<T>
+where
+    T: Actor + Handler<MessageAccept>,
+{
     Single(Uuid, Arguments),
     // tid, ops, participants.length()
     Indep(Uuid, Arguments, usize),
-    IndepParticipants(Uuid, CommitVote, Vec<Recipient<MessageAccept>>),
+    IndepParticipants(Uuid, CommitVote, Vec<Addr<T>>),
     // TODO: change to be actors instead of u64.
     Coord(Uuid, Arguments, usize),
-    CoordParticipants(Uuid, CommitVote, Vec<Recipient<MessageAccept>>),
+    CoordParticipants(Uuid, CommitVote, Vec<Addr<T>>),
 }
 
 #[derive(Message)]

@@ -1,3 +1,4 @@
+mod application;
 mod customer;
 mod database;
 mod messages;
@@ -10,54 +11,41 @@ mod runtime;
 use std::time::Duration;
 
 use actix::prelude::*;
+use application::single_repository_transaction;
 use customer::Customer;
-use messages::{GetResult, MessagePrepare};
-use operations::{Arguments, Operation};
+use operations::Operation;
 use order::Order;
 use product::Product;
-use uuid::Uuid;
 
-use crate::runtime::Runtime;
+use crate::{runtime::Runtime, application::indep_repository_transaction};
 
 #[actix_rt::main]
 async fn main() {
+    let mut runtime = Runtime::new();
+
     let customer = Customer::new().start();
-    let tid = Uuid::new_v4();
     let operations = vec![Operation::Create(0, 0), Operation::Read(0)];
-    let args = Arguments {
-        timestamp: 0,
-        operations,
-    };
-    let _a = customer
-        .send(MessagePrepare::Single(tid, args.clone()))
-        .await;
 
-    let b = customer.send(GetResult(tid)).await;
-    println!("b: {:?}", b);
+    let cust = single_repository_transaction(customer.clone(), operations, &mut runtime).await;
+    println!("customer single transaction: {:?}", cust);
 
-    let runtime = Runtime::new();
     let order = Order::new().start();
-    let tid = Uuid::new_v4();
     let operations = vec![Operation::Create(1, 3), Operation::Read(1)];
-    let args = Arguments {
-        timestamp: 0,
-        operations,
-    };
-    let _a = order
-        .send(MessagePrepare::Single(tid, args.clone()))
-        .await;
+    let ord = single_repository_transaction(order.clone(), operations, &mut runtime).await;
+    println!("order single transaction: {:?}", ord);
 
-    let b = order.send(GetResult(tid)).await;
-    println!("b: {:?}", b);
-
-    let tid = Uuid::new_v4();
     let operations = vec![Operation::Read(1)];
-    let args = Arguments {
+    // let a = vec![order];
+    // let res = indep_repository_transaction(a, operations, &mut runtime).await;
+    // println!("indep xaction: {:?}", res);
+
+    let tid = uuid::Uuid::new_v4();
+    let args = crate::operations::Arguments {
         timestamp: 0,
         operations,
     };
     let vote_customer = customer
-        .send(MessagePrepare::Indep(tid, args.clone(), 1))
+        .send(crate::messages::MessagePrepare::<Order>::Indep(tid, args.clone(), 2))
         .await
         .unwrap()
         .unwrap();
@@ -65,33 +53,33 @@ async fn main() {
     println!("vote cus: {:?}", vote_customer);
 
     let vote_order = order
-        .send(MessagePrepare::Indep(tid, args.clone(), 1))
+        .send(crate::messages::MessagePrepare::<Order>::Indep(tid, args.clone(), 2))
         .await;
 
     println!("vote order: {:?}", vote_order);
 
+    let prod = Product::new().start();
     let _a = customer
-        .send(MessagePrepare::IndepParticipants(
+        .send(crate::messages::MessagePrepare::IndepParticipants(
             tid,
             vote_customer,
             vec![order.clone().into()],
         ))
         .await;
-    let _a = order
-        .send(MessagePrepare::IndepParticipants(
-            tid,
-            vote_order.unwrap().unwrap(),
-            vec![customer.clone().into()],
-        ))
-        .await;
+    // let _a = order
+    //     .send(MessagePrepare::IndepParticipants(
+    //         tid,
+    //         vote_order.unwrap().unwrap(),
+    //         vec![customer.clone().into()],
+    //     ))
+    //     .await;
 
-    let b = customer.send(GetResult(tid)).await;
-    println!("b: {:?}", b);
+    // let b = customer.send(GetResult(tid)).await;
+    // println!("b: {:?}", b);
 
-    let b = order.send(GetResult(tid)).await;
-    println!("b: {:?}", b);
+    // let b = order.send(GetResult(tid)).await;
+    // println!("b: {:?}", b);
 
-    let _ = Product::new().start();
 
     let _ = actix_rt::time::sleep(Duration::from_secs(2)).await;
 }

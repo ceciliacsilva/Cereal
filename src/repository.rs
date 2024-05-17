@@ -8,6 +8,8 @@ pub(crate) use find_max;
 
 macro_rules! repository {
     ($repo_name:ident, $filename:expr) => {
+        use actix::dev::ToEnvelope;
+
         impl $repo_name {
             fn handle_single(
                 &mut self,
@@ -60,12 +62,15 @@ macro_rules! repository {
                 }
             }
 
-            fn send_message_accept_indep_to_participants(
+            fn send_message_accept_indep_to_participants<T>(
                 &mut self,
                 tid: Uuid,
                 vote: CommitVote,
-                other_participants: &Vec<Recipient<MessageAccept>>,
+                other_participants: &Vec<Addr<T>>,
             ) -> anyhow::Result<crate::messages::CommitVote, anyhow::Error>
+            where
+                T: Actor + Handler<MessageAccept>,
+                <T as actix::Actor>::Context: ToEnvelope<T, MessageAccept>,
             {
                 let proposed_ts = self.database.get_proposed_ts_for_tid(&tid);
                 for participant in other_participants {
@@ -130,12 +135,15 @@ macro_rules! repository {
                 }
             }
 
-            fn send_message_accept_coord_to_participants(
+            fn send_message_accept_coord_to_participants<T>(
                 &mut self,
                 tid: Uuid,
                 vote: CommitVote,
-                other_participants: &Vec<Recipient<MessageAccept>>,
+                other_participants: &Vec<Addr<T>>,
             ) -> anyhow::Result<crate::messages::CommitVote, anyhow::Error>
+            where
+                T: Actor + Handler<MessageAccept>,
+                <T as actix::Actor>::Context: ToEnvelope<T, MessageAccept>,
             {
                 let proposed_ts = self.database.get_proposed_ts_for_tid(&tid);
                 for participant in other_participants {
@@ -158,7 +166,6 @@ macro_rules! repository {
                     return Ok(CommitVote::Abort);
                 }
 
-                // Didn't get the first message `MessagePrepare`, so try later.
                 if self.database.active_transactions.is_empty() {
                     println!("Should not be here");
                     return Ok(CommitVote::InProgress);
@@ -186,10 +193,14 @@ macro_rules! repository {
             }
         }
 
-        impl Handler<MessagePrepare> for $repo_name {
+        impl<T> Handler<MessagePrepare<T>> for $repo_name
+        where
+            T: Actor + Handler<MessageAccept>,
+            <T as actix::Actor>::Context: ToEnvelope<T, MessageAccept>,
+        {
             type Result = anyhow::Result<CommitVote, anyhow::Error>;
 
-            fn handle(&mut self, msg: MessagePrepare, _ctx: &mut Self::Context) -> Self::Result {
+            fn handle(&mut self, msg: MessagePrepare<T>, _ctx: &mut Self::Context) -> Self::Result {
                 match msg {
                     MessagePrepare::Single(tid, args) => self.handle_single(tid, args),
                     MessagePrepare::Indep(tid, args, participants_len) => {

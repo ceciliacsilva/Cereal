@@ -191,6 +191,7 @@ impl Database {
         Ok(*result.last().unwrap())
     }
 
+    /// Run all `next available to run` transactions, by lowest timestamp and got all needed responses back.
     pub(crate) fn run_nexts(&mut self) -> HashMap<Uuid, anyhow::Result<Option<usize>>> {
         let mut result = HashMap::new();
         while let Some(tid) = self.set_next_to_run() {

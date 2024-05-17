@@ -7,7 +7,7 @@ use crate::{
     database::Database,
     messages::{CommitVote, GetResult, MessageAccept, MessagePrepare},
     operations::Arguments,
-    repository::{repository, find_max},
+    repository::{find_max, repository},
     runtime::Runtime,
 };
 
