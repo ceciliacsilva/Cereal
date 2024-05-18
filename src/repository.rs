@@ -14,7 +14,7 @@ pub(crate) struct Repository {
     pub(crate) database: Database,
     pub(crate) runtime: Runtime,
     pub(crate) last_timestamp: usize,
-    pub(crate) done_xactions: HashMap<Uuid, Option<Table>>,
+    pub(crate) done_xactions: HashMap<Uuid, anyhow::Result<Option<Table>>>,
     pub(crate) filename: String,
 }
 
@@ -58,7 +58,7 @@ impl Repository {
         let result = self.database.run_nexts();
 
         for r in result {
-            self.done_xactions.insert(r.0, r.1);
+            self.done_xactions.insert(r.0, Ok(r.1));
         }
 
         Ok(CommitVote::InProgress)
@@ -74,17 +74,20 @@ impl Repository {
         let current_time = runtime.now();
         let proposed_ts = find_max!(args.timestamp, current_time, self.last_timestamp) + 1;
 
-        let operations_str = format!("{:?}", args.operations);
-        runtime.write_to_durable(&self.filename, &operations_str, proposed_ts)?;
-
         self.database
-            .add_xaction(&tid, proposed_ts, args.operations, participants_len);
+            .add_xaction(&tid, proposed_ts, args.operations.clone(), participants_len);
 
-        if self.database.has_conflict(&tid) {
+        let vote = if self.database.check_for_conflicts_and_primary_key(&tid) {
+            self.database.finalize(&tid, proposed_ts);
             Ok(CommitVote::Conflict)
         } else {
             Ok(CommitVote::Commit(None))
-        }
+        };
+
+        let operations_str = format!("{:?}, {:?}", args.operations, vote);
+        runtime.write_to_durable(&self.filename, &operations_str, proposed_ts)?;
+
+        vote
     }
 
     fn send_message_accept_indep_to_participants(
@@ -111,21 +114,33 @@ impl Repository {
         // XXX: can it be abort??
         if vote == CommitVote::Conflict {
             self.database.finalize(&tid, proposed_ts);
+            self.done_xactions
+                .insert(tid, Err(anyhow::anyhow!("Problem at another repository")));
+            return Ok(CommitVote::Abort);
+        }
+        // A conflict happened locally and the transaction should be aborted.
+        if let Some(_) = self.database.tid_to_ts_end_xaction_ends.get(&tid) {
+            self.done_xactions.insert(
+                tid,
+                Err(anyhow::anyhow!(
+                    "Local problem, locked key or missing primary key"
+                )),
+            );
             return Ok(CommitVote::Abort);
         }
 
-        // Didn't get the first message `MessagePrepare`, so try later.
         if self.database.active_transactions.is_empty() {
             println!("Should not be here");
             return Ok(CommitVote::InProgress);
         }
 
         self.database.decrement_reply_count(&tid);
-        self.database.update_proposed_ts(&tid, proposed_ts);
+        self.database
+            .update_proposed_ts_to_highest(&tid, proposed_ts);
         let result = self.database.run_nexts();
 
         for r in result {
-            self.done_xactions.insert(r.0, r.1);
+            self.done_xactions.insert(r.0, Ok(r.1));
         }
 
         Ok(CommitVote::InProgress)
@@ -147,7 +162,8 @@ impl Repository {
         self.database
             .add_xaction(&tid, proposed_ts, args.operations.clone(), participants_len);
 
-        let vote = if self.database.has_conflict(&tid) {
+        let vote = if self.database.check_for_conflicts_and_primary_key(&tid) {
+            self.database.finalize(&tid, proposed_ts);
             Ok(CommitVote::Conflict)
         } else {
             self.database.get_all_locks(&tid);
@@ -184,6 +200,18 @@ impl Repository {
         // XXX: can it be abort??
         if vote == CommitVote::Conflict {
             self.database.finalize(&tid, proposed_ts);
+            self.done_xactions
+                .insert(tid, Err(anyhow::anyhow!("Problem at another repository")));
+            return Ok(CommitVote::Abort);
+        }
+        // A conflict happened locally and the transaction should be aborted.
+        if let Some(_) = self.database.tid_to_ts_end_xaction_ends.get(&tid) {
+            self.done_xactions.insert(
+                tid,
+                Err(anyhow::anyhow!(
+                    "Local problem, locked key or missing primary key"
+                )),
+            );
             return Ok(CommitVote::Abort);
         }
 
@@ -193,12 +221,13 @@ impl Repository {
         }
 
         self.database.decrement_reply_count(&tid);
-        self.database.update_proposed_ts(&tid, proposed_ts);
+        self.database
+            .update_proposed_ts_to_highest(&tid, proposed_ts);
         let result = self.database.run_nexts();
 
         self.database.release_locks();
         for r in result {
-            self.done_xactions.insert(r.0, r.1);
+            self.done_xactions.insert(r.0, Ok(r.1));
         }
 
         Ok(CommitVote::InProgress)
@@ -257,7 +286,7 @@ impl Handler<GetResult> for Repository {
     fn handle(&mut self, msg: GetResult, ctx: &mut Self::Context) -> Self::Result {
         let tid = msg.0;
         if let Some(result) = self.done_xactions.remove(&tid) {
-            return Box::pin(async move { Ok(result) });
+            return Box::pin(async move { result });
         } else {
             let request = ctx.address().send(GetResult(tid));
             Box::pin(async move { request.await.unwrap() })

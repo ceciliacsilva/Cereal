@@ -1,13 +1,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::operations::{Operation, Table};
+use crate::operations::{Expr, Operation, PrimaryKey, Statement, Table};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Database {
-    pub(crate) data_structure: BTreeMap<usize, Table>,
+    pub(crate) data_structure: BTreeMap<PrimaryKey, Table>,
     pub(crate) active_transactions: BTreeMap<Uuid, Transaction>,
-    pub(crate) locked_keys: HashSet<usize>,
+    pub(crate) locked_keys: HashSet<PrimaryKey>,
     pub(crate) tid_to_ts_end_xaction_ends: HashMap<Uuid, usize>,
 }
 
@@ -42,7 +42,7 @@ impl Database {
     //
     // The ideia here is to keep the highest proposed_ts between the current
     // one and the new one.
-    pub(crate) fn update_proposed_ts(&mut self, tid: &Uuid, ts: usize) {
+    pub(crate) fn update_proposed_ts_to_highest(&mut self, tid: &Uuid, ts: usize) {
         self.active_transactions.entry(*tid).and_modify(|xaction| {
             xaction.proposed_ts = if xaction.proposed_ts > ts {
                 xaction.proposed_ts
@@ -86,43 +86,50 @@ impl Database {
         })
     }
 
-    pub(crate) fn has_conflict(&self, tid: &Uuid) -> bool {
-        let mut conflict = false;
+    /// Check that all needed keys exist and are `free` (not held by a `Coord` transaction).
+    pub(crate) fn check_for_conflicts_and_primary_key(&self, tid: &Uuid) -> bool {
+        let mut has_problem = false;
         if let Some(xaction) = self.active_transactions.get(tid) {
             let operations = &xaction.operations;
             for op in operations {
                 match op {
-                    Operation::Create(key, _) => {
+                    Operation::Statement(Statement::Create(key, _)) => {
                         if self.locked_keys.contains(key) {
-                            conflict = true;
+                            has_problem = true;
                             break;
                         }
                     }
-                    Operation::Read(key) => {
+                    Operation::Expr(Expr::Read(key)) => {
                         if self.locked_keys.contains(key) {
-                            conflict = true;
+                            has_problem = true;
+                            break;
+                        }
+                        if !self.data_structure.contains_key(key) {
+                            has_problem = true;
                             break;
                         }
                     }
-                    Operation::Update(key, _) => {
+                    Operation::Statement(Statement::Update(key, _)) => {
                         if self.locked_keys.contains(key) {
-                            conflict = true;
+                            has_problem = true;
                             break;
                         }
                     }
-                    Operation::Delete(key) => {
+                    Operation::Expr(Expr::Delete(key)) => {
                         if self.locked_keys.contains(key) {
-                            conflict = true;
+                            has_problem = true;
+                            break;
+                        }
+                        if !self.data_structure.contains_key(key) {
+                            has_problem = true;
                             break;
                         }
                     }
-                    Operation::Value(_) => {
-                        ()
-                    }
+                    Operation::Expr(Expr::Value(_)) => (),
                 }
             }
         }
-        conflict
+        has_problem
     }
 
     pub(crate) fn get_all_locks(&mut self, tid: &Uuid) {
@@ -130,21 +137,19 @@ impl Database {
             let operations = &xaction.operations;
             for op in operations {
                 match op {
-                    Operation::Create(key, _) => {
+                    Operation::Statement(Statement::Create(key, _)) => {
                         self.locked_keys.insert(*key);
                     }
-                    Operation::Read(key) => {
+                    Operation::Expr(Expr::Read(key)) => {
                         self.locked_keys.insert(*key);
                     }
-                    Operation::Update(key, _) => {
+                    Operation::Statement(Statement::Update(key, _)) => {
                         self.locked_keys.insert(*key);
                     }
-                    Operation::Delete(key) => {
+                    Operation::Expr(Expr::Delete(key)) => {
                         self.locked_keys.insert(*key);
                     }
-                    Operation::Value(_) => {
-                        ()
-                    }
+                    Operation::Expr(Expr::Value(_)) => (),
                 }
             }
         }
@@ -154,32 +159,29 @@ impl Database {
         self.locked_keys.clear();
     }
 
-    fn eval_operation(database: &mut BTreeMap<usize, Table>, op: &Operation) -> Option<Table> {
+    fn eval_operation(database: &mut BTreeMap<PrimaryKey, Table>, op: &Operation) -> Option<Table> {
         match op {
-            Operation::Create(key, expr) => {
-                let value = Self::eval_operation(database, expr).to_owned();
-                // TODO: I need to handle the None case.
-                database.insert(key.to_owned(), value.unwrap_or_default())
+            Operation::Statement(Statement::Create(key, expr)) => {
+                let value = Self::eval_operation(database, &Operation::Expr(*expr.to_owned()));
+                database.insert(
+                    key.to_owned(),
+                    value.expect("eval_operation didn't return a valid `Table`."),
+                )
             }
             // TODO: can I remove the cloned?
-            Operation::Read(key) => {
-                database.get(key).cloned()
-            }
-            Operation::Update(key, expr) => {
-                let value = Self::eval_operation(database, expr);
-                // TODO: I need to handle the None case.
+            Operation::Expr(Expr::Read(key)) => database.get(key).cloned(),
+            Operation::Statement(Statement::Update(key, expr)) => {
+                let value = Self::eval_operation(database, &Operation::Expr(*expr.to_owned()));
                 database
                     .entry(key.to_owned())
-                    .and_modify(|v| *v = value.unwrap_or_default())
+                    .and_modify(|v| {
+                        *v = value.expect("eval_operation didn't return a valid `Table`.")
+                    })
                     .or_insert(value?);
                 value
             }
-            Operation::Delete(key) => {
-                database.remove(key)
-            }
-            Operation::Value(value) => {
-                Some(*value)
-            }
+            Operation::Expr(Expr::Delete(key)) => database.remove(key),
+            Operation::Expr(Expr::Value(value)) => Some(*value),
         }
     }
 
@@ -200,7 +202,7 @@ impl Database {
     pub(crate) fn run_nexts(&mut self) -> HashMap<Uuid, Option<Table>> {
         let mut result = HashMap::new();
         while let Some(tid) = self.set_next_to_run() {
-            if self.has_conflict(&tid) {
+            if self.check_for_conflicts_and_primary_key(&tid) {
                 result.insert(tid.clone(), None);
                 return result;
             }

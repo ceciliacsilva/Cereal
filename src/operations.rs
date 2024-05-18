@@ -1,13 +1,25 @@
+/// This should be a `blob` (bytes) like thing.
 pub(crate) type Table = (usize, usize);
+pub(crate) type PrimaryKey = usize;
 
 /// This is a expression. Always returns something.
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum Operation {
+pub(crate) enum Expr {
     Value(Table),
-    Create(usize, Box<Operation>),
-    Read(usize),
-    Update(usize, Box<Operation>),
-    Delete(usize),
+    Read(PrimaryKey),
+    Delete(PrimaryKey),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Statement {
+    Create(PrimaryKey, Box<Expr>),
+    Update(PrimaryKey, Box<Expr>),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Operation {
+    Expr(Expr),
+    Statement(Statement),
 }
 
 #[derive(Debug, Clone)]
