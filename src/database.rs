@@ -194,8 +194,7 @@ impl Database {
             }
             self.finalize(tid, xaction.proposed_ts);
         }
-        // TODO: handle unwrap()
-        *result.last().unwrap()
+        *result.last()?
     }
 
     /// Run all `next available to run` transactions, by lowest timestamp and got all needed responses back.
@@ -234,5 +233,148 @@ impl Transaction {
             next_to_run,
             operations,
         }
+    }
+}
+
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add_xaction_and_decrement_xaction() {
+        let mut database = Database::new();
+        let tid = Uuid::new_v4();
+        let participants_len = 2;
+        database.add_xaction(&tid, 0, vec![], participants_len);
+        database.decrement_reply_count(&tid);
+        if let Some(xaction) = database.active_transactions.get(&tid) {
+            assert_eq!(xaction.waiting_for, participants_len - 1);
+        }
+    }
+
+    #[test]
+    fn test_set_next_to_run_waiting_0() {
+        let mut database = Database::new();
+        let tid = Uuid::new_v4();
+        let participants_len = 1;
+        database.add_xaction(&tid, 0, vec![], participants_len);
+        database.decrement_reply_count(&tid);
+        let tid_next = database.set_next_to_run();
+        assert_eq!(Some(tid), tid_next);
+    }
+
+    #[test]
+    fn test_not_next_to_run_if_still_waiting() {
+        let mut database = Database::new();
+        let tid = Uuid::new_v4();
+        let participants_len = 2;
+        database.add_xaction(&tid, 0, vec![], participants_len);
+        database.decrement_reply_count(&tid);
+        let tid_next = database.set_next_to_run();
+        assert_eq!(None, tid_next);
+    }
+
+    #[test]
+    fn test_next_to_run_smallest_ts() {
+        let mut database = Database::new();
+        let participants_len = 0;
+
+        let tid_ts_bigger = Uuid::new_v4();
+        database.add_xaction(&tid_ts_bigger, 10, vec![], participants_len);
+        let tid_ts_smaller = Uuid::new_v4();
+        database.add_xaction(&tid_ts_smaller, 4, vec![], participants_len);
+
+        assert_eq!(Some(tid_ts_smaller), database.set_next_to_run());
+        database.run_operations(&tid_ts_smaller);
+        assert_eq!(Some(tid_ts_bigger), database.set_next_to_run());
+    }
+
+    #[test]
+    fn test_run_nexts() {
+        let mut database = Database::new();
+        database.data_structure.insert(0, (0, 0));
+        database.data_structure.insert(1, (1, 1));
+        database.data_structure.insert(2, (2, 2));
+
+        let participants_len = 0;
+        let tid_0 = Uuid::new_v4();
+        database.add_xaction(
+            &tid_0,
+            0,
+            vec![Operation::Expr(Expr::Read(0))],
+            participants_len,
+        );
+        let tid_1 = Uuid::new_v4();
+        database.add_xaction(
+            &tid_1,
+            1,
+            vec![Operation::Expr(Expr::Read(1))],
+            participants_len,
+        );
+        let tid_2 = Uuid::new_v4();
+        database.add_xaction(
+            &tid_2,
+            2,
+            vec![Operation::Expr(Expr::Read(2))],
+            participants_len,
+        );
+
+        let result = database.run_nexts();
+        assert_eq!(result.get(&tid_0), Some(&Some((0, 0))));
+        assert_eq!(result.get(&tid_1), Some(&Some((1, 1))));
+        assert_eq!(result.get(&tid_2), Some(&Some((2, 2))));
+    }
+
+    #[test]
+    fn get_all_locks() {
+        let mut database = Database::new();
+        database.data_structure.insert(0, (0, 0));
+
+        let participants_len = 0;
+        let tid = Uuid::new_v4();
+        database.add_xaction(
+            &tid,
+            0,
+            vec![Operation::Expr(Expr::Read(0))],
+            participants_len,
+        );
+
+        database.get_all_locks(&tid);
+
+        assert!(database.locked_keys.contains(&0));
+    }
+
+    #[test]
+    fn test_update_ts() {
+        let mut database = Database::new();
+
+        let participants_len = 0;
+        let tid = Uuid::new_v4();
+        database.add_xaction(&tid, 0, vec![], participants_len);
+
+        database.update_proposed_ts_to_highest(&tid, 4);
+        assert_eq!(
+            database.active_transactions.get(&tid).unwrap().proposed_ts,
+            4
+        );
+
+        database.update_proposed_ts_to_highest(&tid, 2);
+        assert_eq!(
+            database.active_transactions.get(&tid).unwrap().proposed_ts,
+            4
+        );
+    }
+
+    #[test]
+    fn test_finalize() {
+        let mut database = Database::new();
+
+        let participants_len = 0;
+        let tid = Uuid::new_v4();
+        database.add_xaction(&tid, 0, vec![], participants_len);
+
+        database.finalize(&tid, 1);
+
+        assert!(database.active_transactions.is_empty());
+        assert_eq!(database.tid_to_ts_end_xaction_ends.get(&tid), Some(&1));
     }
 }
