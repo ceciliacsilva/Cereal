@@ -1,4 +1,4 @@
-use crate::operations::*;
+use crate::{operations::*, repository::Repository};
 use actix::{
     dev::{MessageResponse, OneshotSender},
     prelude::*,
@@ -7,17 +7,14 @@ use uuid::Uuid;
 
 #[derive(Message)]
 #[rtype(result = "Result<CommitVote, anyhow::Error>")]
-pub(crate) enum MessagePrepare<T>
-where
-    T: Actor + Handler<MessageAccept>,
-{
+pub(crate) enum MessagePrepare {
     Single(Uuid, Arguments),
     // tid, ops, participants.length()
     Indep(Uuid, Arguments, usize),
-    IndepParticipants(Uuid, CommitVote, Vec<Addr<T>>),
+    IndepParticipants(Uuid, CommitVote, Vec<Addr<Repository>>),
     // TODO: change to be actors instead of u64.
     Coord(Uuid, Arguments, usize),
-    CoordParticipants(Uuid, CommitVote, Vec<Addr<T>>),
+    CoordParticipants(Uuid, CommitVote, Vec<Addr<Repository>>),
 }
 
 #[derive(Message)]
@@ -30,7 +27,7 @@ pub(crate) enum MessageAccept {
 }
 
 #[derive(Message)]
-#[rtype(result = "Result<Option<usize>, anyhow::Error>")]
+#[rtype(result = "Result<Option<Table>, anyhow::Error>")]
 pub(crate) struct GetResult(pub Uuid);
 
 #[derive(Debug, Clone, PartialEq)]

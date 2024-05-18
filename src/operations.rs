@@ -1,8 +1,12 @@
-#[derive(Debug, Clone)]
+pub(crate) type Table = (usize, usize);
+
+/// This is a expression. Always returns something.
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Operation {
-    Create(usize, usize),
+    Value(Table),
+    Create(usize, Box<Operation>),
     Read(usize),
-    Update(usize, usize),
+    Update(usize, Box<Operation>),
     Delete(usize),
 }
 

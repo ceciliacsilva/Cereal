@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use uuid::Uuid;
 
-use crate::operations::Operation;
+use crate::operations::{Operation, Table};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Database {
-    pub(crate) data_structure: BTreeMap<usize, usize>,
+    pub(crate) data_structure: BTreeMap<usize, Table>,
     pub(crate) active_transactions: BTreeMap<Uuid, Transaction>,
     pub(crate) locked_keys: HashSet<usize>,
     pub(crate) tid_to_ts_end_xaction_ends: HashMap<Uuid, usize>,
@@ -116,6 +116,9 @@ impl Database {
                             break;
                         }
                     }
+                    Operation::Value(_) => {
+                        ()
+                    }
                 }
             }
         }
@@ -139,6 +142,9 @@ impl Database {
                     Operation::Delete(key) => {
                         self.locked_keys.insert(*key);
                     }
+                    Operation::Value(_) => {
+                        ()
+                    }
                 }
             }
         }
@@ -148,55 +154,54 @@ impl Database {
         self.locked_keys.clear();
     }
 
-    pub(crate) fn run_operations(&mut self, tid: &Uuid) -> anyhow::Result<Option<usize>> {
+    fn eval_operation(database: &mut BTreeMap<usize, Table>, op: &Operation) -> Option<Table> {
+        match op {
+            Operation::Create(key, expr) => {
+                let value = Self::eval_operation(database, expr).to_owned();
+                // TODO: I need to handle the None case.
+                database.insert(key.to_owned(), value.unwrap_or_default())
+            }
+            // TODO: can I remove the cloned?
+            Operation::Read(key) => {
+                database.get(key).cloned()
+            }
+            Operation::Update(key, expr) => {
+                let value = Self::eval_operation(database, expr);
+                // TODO: I need to handle the None case.
+                database
+                    .entry(key.to_owned())
+                    .and_modify(|v| *v = value.unwrap_or_default())
+                    .or_insert(value?);
+                value
+            }
+            Operation::Delete(key) => {
+                database.remove(key)
+            }
+            Operation::Value(value) => {
+                Some(*value)
+            }
+        }
+    }
+
+    pub(crate) fn run_operations(&mut self, tid: &Uuid) -> Option<Table> {
         let mut result = vec![];
         if let Some(xaction) = self.active_transactions.get(tid) {
             let operations = &xaction.operations;
             for op in operations {
-                result.push(match op {
-                    Operation::Create(key, value) => {
-                        if self.locked_keys.contains(key) {
-                            anyhow::bail!("Conflict");
-                        }
-                        self.data_structure.insert(key.to_owned(), value.to_owned())
-                    }
-                    // TODO: can I remove the cloned?
-                    Operation::Read(key) => {
-                        if self.locked_keys.contains(key) {
-                            anyhow::bail!("Conflict");
-                        }
-                        self.data_structure.get(key).cloned()
-                    }
-                    Operation::Update(key, value) => {
-                        if self.locked_keys.contains(key) {
-                            anyhow::bail!("Conflict");
-                        }
-                        self.data_structure
-                            .entry(key.to_owned())
-                            .and_modify(|v| *v = value.to_owned())
-                            .or_insert(value.to_owned());
-                        None
-                    }
-                    Operation::Delete(key) => {
-                        if self.locked_keys.contains(key) {
-                            anyhow::bail!("Conflict");
-                        }
-                        self.data_structure.remove(key)
-                    }
-                });
+                result.push(Self::eval_operation(&mut self.data_structure, op));
             }
             self.finalize(tid, xaction.proposed_ts);
         }
         // TODO: handle unwrap()
-        Ok(*result.last().unwrap())
+        *result.last().unwrap()
     }
 
     /// Run all `next available to run` transactions, by lowest timestamp and got all needed responses back.
-    pub(crate) fn run_nexts(&mut self) -> HashMap<Uuid, anyhow::Result<Option<usize>>> {
+    pub(crate) fn run_nexts(&mut self) -> HashMap<Uuid, Option<Table>> {
         let mut result = HashMap::new();
         while let Some(tid) = self.set_next_to_run() {
             if self.has_conflict(&tid) {
-                result.insert(tid.clone(), Err(anyhow::anyhow!("Conflict")));
+                result.insert(tid.clone(), None);
                 return result;
             }
             result.insert(tid.clone(), self.run_operations(&tid));
