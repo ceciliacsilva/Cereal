@@ -5,20 +5,47 @@ mod operations;
 mod repository;
 mod runtime;
 
-use std::time::Duration;
-
 use actix::prelude::*;
-use application::single_repository_transaction;
 use operations::Operation;
 use repository::Repository;
 
 use crate::{
-    application::{coord_repository_transaction, indep_repository_transaction},
+    application::{single_repository_transaction, indep_repository_transaction},
     operations::{Expr, Statement},
     runtime::Runtime,
 };
 
 #[actix_rt::main]
-async fn main() {
-    let _ = actix_rt::time::sleep(Duration::from_secs(2)).await;
+async fn main() -> anyhow::Result<()> {
+    let mut runtime = Runtime::new();
+
+    let customer = Repository::new("customer".to_string()).start();
+    let operations = vec![
+        Operation::Statement(Statement::Create(0, Box::new(Expr::Value((1, 1))))),
+        Operation::Statement(Statement::Create(1, Box::new(Expr::Value((2, 2))))),
+        Operation::Statement(Statement::Create(2, Box::new(Expr::Value((3, 3))))),
+    ];
+
+    let cust = single_repository_transaction(&customer, operations, &mut runtime).await;
+    println!("Adding customer info. Result: {:?}", cust);
+
+    let product = Repository::new("product".to_string()).start();
+    let operations = vec![
+        Operation::Statement(Statement::Create(0, Box::new(Expr::Value((4, 4))))),
+        Operation::Statement(Statement::Create(1, Box::new(Expr::Value((5, 5))))),
+        Operation::Statement(Statement::Create(2, Box::new(Expr::Value((6, 6))))),
+    ];
+
+    let resp = single_repository_transaction(&product, operations, &mut runtime).await;
+    println!("Adding product info. Result: {:?}", resp);
+
+    let operations = vec![
+        vec![Operation::Expr(Expr::Read(0))],
+        vec![Operation::Expr(Expr::Read(0))],
+    ];
+
+    let reads = indep_repository_transaction(vec![customer, product], operations, &mut runtime).await;
+    println!("reading repositories: {:?}", reads);
+
+    Ok(())
 }
