@@ -2,7 +2,7 @@ use std::ops::{Add, Sub};
 
 /// This should be a `blob` (bytes) like thing.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Table(pub usize, pub usize);
+pub struct Table(pub i64, pub i64);
 pub(crate) type PrimaryKey = usize;
 
 /// This is a expression. Always returns something.

@@ -86,75 +86,89 @@ impl Database {
         })
     }
 
+    fn check_for_problems_per_operation(&self, op: &Operation) -> bool {
+        match op {
+            Operation::Statement(Statement::Create(key, expr)) => {
+                if self.locked_keys.contains(key) {
+                    return true;
+                }
+                return self.check_for_problems_per_operation(&Operation::Expr((**expr).clone()));
+            }
+            Operation::Expr(Expr::Read(key)) => {
+                if self.locked_keys.contains(key) {
+                    return true;
+                }
+                if !self.data_structure.contains_key(key) {
+                    return true;
+                }
+            }
+            Operation::Statement(Statement::Update(key, expr)) => {
+                if self.locked_keys.contains(key) {
+                    return true;
+                }
+
+                return self.check_for_problems_per_operation(&Operation::Expr((**expr).clone()));
+            }
+            Operation::Expr(Expr::Delete(key)) => {
+                if self.locked_keys.contains(key) {
+                    return true;
+                }
+                if !self.data_structure.contains_key(key) {
+                    return true;
+                }
+            }
+            Operation::Expr(Expr::Value(_)) => (),
+            Operation::Expr(Expr::Add(e1, e2)) | Operation::Expr(Expr::Sub(e1, e2)) => {
+                return self.check_for_problems_per_operation(&Operation::Expr((**e1).clone()))
+                    || self.check_for_problems_per_operation(&Operation::Expr((**e2).clone()));
+            }
+        }
+        false
+    }
+
     /// Check that all needed keys exist and are `free` (not held by a `Coord` transaction).
     pub(crate) fn check_for_conflicts_and_primary_key(&self, tid: &Uuid) -> bool {
-        let mut has_problem = false;
         if let Some(xaction) = self.active_transactions.get(tid) {
             let operations = &xaction.operations;
             for op in operations {
-                match op {
-                    Operation::Statement(Statement::Create(key, _)) => {
-                        if self.locked_keys.contains(key) {
-                            has_problem = true;
-                            break;
-                        }
-                    }
-                    Operation::Expr(Expr::Read(key)) => {
-                        if self.locked_keys.contains(key) {
-                            has_problem = true;
-                            break;
-                        }
-                        if !self.data_structure.contains_key(key) {
-                            has_problem = true;
-                            break;
-                        }
-                    }
-                    Operation::Statement(Statement::Update(key, _)) => {
-                        if self.locked_keys.contains(key) {
-                            has_problem = true;
-                            break;
-                        }
-                    }
-                    Operation::Expr(Expr::Delete(key)) => {
-                        if self.locked_keys.contains(key) {
-                            has_problem = true;
-                            break;
-                        }
-                        if !self.data_structure.contains_key(key) {
-                            has_problem = true;
-                            break;
-                        }
-                    }
-                    Operation::Expr(Expr::Value(_))
-                    | Operation::Expr(Expr::Add(_, _))
-                    | Operation::Expr(Expr::Sub(_, _)) => (),
+                if self.check_for_problems_per_operation(op) {
+                    return true;
                 }
             }
         }
-        has_problem
+        false
+    }
+
+    pub fn get_lock_per_operation(&mut self, op: &Operation) {
+        match op {
+            Operation::Statement(Statement::Create(key, expr)) => {
+                self.locked_keys.insert(*key);
+                self.get_lock_per_operation(&Operation::Expr((**expr).clone()));
+            }
+            Operation::Expr(Expr::Read(key)) => {
+                self.locked_keys.insert(*key);
+            }
+            Operation::Statement(Statement::Update(key, expr)) => {
+                self.locked_keys.insert(*key);
+                self.get_lock_per_operation(&Operation::Expr((**expr).clone()));
+            }
+            Operation::Expr(Expr::Delete(key)) => {
+                self.locked_keys.insert(*key);
+            }
+            Operation::Expr(Expr::Value(_)) => (),
+            Operation::Expr(Expr::Add(e1, e2)) | Operation::Expr(Expr::Sub(e1, e2)) => {
+                self.get_lock_per_operation(&Operation::Expr((**e1).clone()));
+                self.get_lock_per_operation(&Operation::Expr((**e2).clone()));
+            }
+        }
     }
 
     pub(crate) fn get_all_locks(&mut self, tid: &Uuid) {
         if let Some(xaction) = self.active_transactions.get(tid) {
-            let operations = &xaction.operations;
+            // TODO: Do I really need to clone here?
+            let operations = &xaction.operations.clone();
             for op in operations {
-                match op {
-                    Operation::Statement(Statement::Create(key, _)) => {
-                        self.locked_keys.insert(*key);
-                    }
-                    Operation::Expr(Expr::Read(key)) => {
-                        self.locked_keys.insert(*key);
-                    }
-                    Operation::Statement(Statement::Update(key, _)) => {
-                        self.locked_keys.insert(*key);
-                    }
-                    Operation::Expr(Expr::Delete(key)) => {
-                        self.locked_keys.insert(*key);
-                    }
-                    Operation::Expr(Expr::Value(_))
-                    | Operation::Expr(Expr::Add(_, _))
-                    | Operation::Expr(Expr::Sub(_, _)) => (),
-                }
+                self.get_lock_per_operation(op);
             }
         }
     }
@@ -177,7 +191,6 @@ impl Database {
             Operation::Expr(Expr::Read(key)) => database.get(key).cloned(),
             Operation::Statement(Statement::Update(key, expr)) => {
                 let value = Self::eval_operation(database, &Operation::Expr(*expr.to_owned()));
-                log::info!("{:?}", value);
                 database
                     .entry(key.to_owned())
                     .and_modify(|v| {

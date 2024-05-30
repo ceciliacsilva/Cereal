@@ -130,7 +130,7 @@ impl Repository {
         }
 
         if self.database.active_transactions.is_empty() {
-            println!("Should not be here");
+            log::error!("Should not be here");
             return Ok(CommitVote::InProgress);
         }
 
@@ -162,7 +162,12 @@ impl Repository {
         self.database
             .add_xaction(&tid, proposed_ts, args.operations.clone(), participants_len);
 
+        log::error!(
+            "check for conflicts: {:?}",
+            self.database.check_for_conflicts_and_primary_key(&tid)
+        );
         let vote = if self.database.check_for_conflicts_and_primary_key(&tid) {
+            log::error!("================TO AQUI {:?}", tid);
             self.database.finalize(&tid, proposed_ts);
             Ok(CommitVote::Conflict)
         } else {
@@ -216,7 +221,7 @@ impl Repository {
         }
 
         if self.database.active_transactions.is_empty() {
-            println!("Should not be here");
+            log::error!("Should not be here");
             return Ok(CommitVote::InProgress);
         }
 

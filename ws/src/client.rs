@@ -53,7 +53,10 @@ pub(crate) struct Client {
 }
 
 impl Client {
-    pub(crate) async fn send_single(&mut self, operations: Vec<Operation>) -> anyhow::Result<Uuid> {
+    pub(crate) async fn send_single(
+        &mut self,
+        operations: Vec<Operation>,
+    ) -> anyhow::Result<Option<Table>> {
         let tid = Uuid::new_v4();
         let args = Arguments {
             timestamp: self.runtime.now(),
@@ -72,10 +75,10 @@ impl Client {
         let vote = decoder::frame_to_commit_vote(&res)?;
         log::info!("Result from {:?} single: {:?}", tid, vote);
 
-        Ok(tid)
+        self.get_result(&tid).await
     }
 
-    pub(crate) async fn get_result(&mut self, tid: &Uuid) -> anyhow::Result<Table> {
+    async fn get_result(&mut self, tid: &Uuid) -> anyhow::Result<Option<Table>> {
         let msg = serde_json::to_string(&MessageWs::GetResult { tid: *tid })
             .expect("this can be serialized");
 
@@ -94,6 +97,7 @@ impl Client {
     }
 }
 
+/// For multi-repository transactions.
 pub(crate) struct Clients<'a> {
     pub(crate) participants: Vec<&'a mut Client>,
 }
@@ -101,9 +105,9 @@ pub(crate) struct Clients<'a> {
 impl<'a> Clients<'a> {
     pub(crate) async fn send_indep(
         &'a mut self,
-        tid: &Uuid,
         operations: Vec<Vec<Operation>>,
-    ) -> anyhow::Result<Vec<Table>> {
+    ) -> anyhow::Result<Vec<Option<Table>>> {
+        let tid = Uuid::new_v4();
         let participants_len = self.participants.len();
         let participants_address: Vec<String> = self
             .participants
@@ -120,7 +124,7 @@ impl<'a> Clients<'a> {
             };
 
             let msg = serde_json::to_string(&MessageWs::Indep {
-                tid: *tid,
+                tid,
                 args,
                 participants_size: participants_len,
             })
@@ -141,7 +145,7 @@ impl<'a> Clients<'a> {
         for (participant, vote) in self.participants.iter_mut().zip(votes) {
             log::debug!("participant: {:?}", participant.uri);
             let msg = serde_json::to_string(&MessageWs::IndepParticipants {
-                tid: *tid,
+                tid,
                 vote,
                 participants: participants_address.clone(),
             })
@@ -169,9 +173,9 @@ impl<'a> Clients<'a> {
 
     pub(crate) async fn send_coord(
         &'a mut self,
-        tid: &Uuid,
         operations: Vec<Vec<Operation>>,
-    ) -> anyhow::Result<Vec<Table>> {
+    ) -> anyhow::Result<Vec<Option<Table>>> {
+        let tid = Uuid::new_v4();
         let participants_len = self.participants.len();
         let participants_address: Vec<String> = self
             .participants
@@ -188,7 +192,7 @@ impl<'a> Clients<'a> {
             };
 
             let msg = serde_json::to_string(&MessageWs::Coord {
-                tid: *tid,
+                tid,
                 args,
                 participants_size: participants_len,
             })
@@ -209,7 +213,7 @@ impl<'a> Clients<'a> {
         for (participant, vote) in self.participants.iter_mut().zip(votes) {
             log::debug!("participant: {:?}", participant.uri);
             let msg = serde_json::to_string(&MessageWs::CoordParticipants {
-                tid: *tid,
+                tid,
                 vote,
                 participants: participants_address.clone(),
             })
@@ -242,6 +246,8 @@ mod decoder {
     use cereal_core::{messages::CommitVote, operations::Table};
     use std::str;
 
+    use crate::GetResultResponse;
+
     pub(crate) fn frame_to_commit_vote(frame: &Frame) -> anyhow::Result<CommitVote> {
         let vote = match frame {
             ws::Frame::Text(text) => Ok(text),
@@ -255,8 +261,8 @@ mod decoder {
         vote.and_then(|vote| Ok(serde_json::from_str(str::from_utf8(&vote)?)?))
     }
 
-    pub(crate) fn frame_to_table(frame: &Frame) -> anyhow::Result<Table> {
-        let vote = match frame {
+    pub(crate) fn frame_to_table(frame: &Frame) -> anyhow::Result<Option<Table>> {
+        let vote: anyhow::Result<&actix_web::web::Bytes> = match frame {
             ws::Frame::Text(text) => Ok(text),
             ws::Frame::Binary(_)
             | ws::Frame::Continuation(_)
@@ -265,6 +271,15 @@ mod decoder {
             | ws::Frame::Close(_) => anyhow::bail!("Not a `ws::Frame::Text`"),
         };
 
-        vote.and_then(|vote| Ok(serde_json::from_str(str::from_utf8(&vote)?)?))
+        let err_or_table: GetResultResponse = vote.and_then(|vote| {
+            Ok(serde_json::from_str::<GetResultResponse>(str::from_utf8(
+                &vote,
+            )?)?)
+        })?;
+        log::trace!("{:?}", err_or_table);
+        match err_or_table {
+            GetResultResponse::Ok(table) => Ok(table),
+            GetResultResponse::Err(err) => anyhow::bail!(err),
+        }
     }
 }

@@ -1,10 +1,16 @@
-use futures_util::{SinkExt as _, StreamExt as _};
 use actix::prelude::*;
 use actix_web::web;
 use actix_web_actors::ws::{self, WebsocketContext};
-use serde::{Serialize, Deserialize};
-use cereal_core::{operations::{Arguments, Table}, messages::{CommitVote, GetResult, MessagePrepare, GetProposedTs, MessageAccept}, repository::Repository};
+use cereal_core::{
+    messages::{CommitVote, GetProposedTs, GetResult, MessageAccept, MessagePrepare},
+    operations::{Arguments, Table},
+    repository::Repository,
+};
+use futures_util::{SinkExt as _, StreamExt as _};
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use crate::GetResultResponse;
 
 #[derive(Message, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -74,10 +80,14 @@ impl RepositoryWs {
             .send(GetResult(tid))
             .into_actor(self)
             .then(|res, _, ctx| {
-                // FIXME: error handling
-                let res: Option<Table> = res.unwrap().unwrap();
-                log::info!("response from tid: {:?}", res);
-                let response = serde_json::to_string(&res)
+                let xaction_result: anyhow::Result<Option<Table>, _> = res.unwrap();
+                let response = match xaction_result {
+                    Ok(table) => GetResultResponse::Ok(table),
+                    Err(e) => GetResultResponse::Err(e.to_string()),
+                };
+
+                log::info!("response from tid: {:?}", response);
+                let response = serde_json::to_string(&response)
                     .expect("Actor response is typed. So should never happend");
                 ctx.text(response);
                 fut::ready(())
@@ -173,7 +183,7 @@ impl RepositoryWs {
                             .await
                             .unwrap();
 
-                        let _ = connection.next().await.unwrap().unwrap();
+                        let _ = connection.next().await.unwrap();
                     }
                     fut::ready(())
                 }
@@ -219,7 +229,7 @@ impl RepositoryWs {
                             .unwrap();
 
                         log::info!("send message accept");
-                        let _ = connection.next().await.unwrap().unwrap();
+                        let _ = connection.next().await.unwrap();
                     }
                     fut::ready(())
                 }
@@ -298,7 +308,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RepositoryWs {
                         } => {
                             log::info!(
                                 "Ws deserialized indep: {:?}, {:?}, {:?}",
-                                tid, args, participants_size
+                                tid,
+                                args,
+                                participants_size
                             );
                             self.send_prepare_indep(tid, args, participants_size, ctx);
                         }
@@ -309,7 +321,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RepositoryWs {
                         } => {
                             log::info!(
                                 "Ws deserialized indep participants: {:?}, {:?}, {:?}",
-                                tid, vote, participants
+                                tid,
+                                vote,
+                                participants
                             );
                             self.send_prepare_indep_accept(tid, vote, participants, ctx);
                         }
@@ -320,7 +334,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RepositoryWs {
                         } => {
                             log::info!(
                                 "Ws deserialized coord: {:?}, {:?}, {:?}",
-                                tid, args, participants_size
+                                tid,
+                                args,
+                                participants_size
                             );
                             self.send_prepare_coord(tid, args, participants_size, ctx);
                         }
@@ -331,7 +347,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RepositoryWs {
                         } => {
                             log::info!(
                                 "Ws deserialized coord participants: {:?}, {:?}, {:?}",
-                                tid, vote, participants
+                                tid,
+                                vote,
+                                participants
                             );
                             self.send_prepare_coord_accept(tid, vote, participants, ctx);
                         }
@@ -342,7 +360,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RepositoryWs {
                         } => {
                             log::info!(
                                 "Ws deserialized accept indep: {:?}, {:?}, {:?}",
-                                tid, proposed_ts, vote
+                                tid,
+                                proposed_ts,
+                                vote
                             );
                             self.send_accept_indep(tid, proposed_ts, vote, ctx);
                         }
@@ -353,7 +373,9 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RepositoryWs {
                         } => {
                             log::info!(
                                 "Ws deserialized accept coord: {:?}, {:?}, {:?}",
-                                tid, proposed_ts, vote
+                                tid,
+                                proposed_ts,
+                                vote
                             );
                             self.send_accept_coord(tid, proposed_ts, vote, ctx);
                         }
