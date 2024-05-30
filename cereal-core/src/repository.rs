@@ -10,15 +10,30 @@ use crate::{
 };
 use actix::prelude::*;
 
+/// A `Repository`, represents a generic Database application.
+///
+/// Here is just a very toy-ish implementation, meant to be used inside a
+/// `Actix-actor`.
 pub struct Repository {
+    /// A [`Database`] that holds the data.
     pub(crate) database: Database,
+    /// A [`Runtime`] that controls time and persistency.
     pub(crate) runtime: Runtime,
+    /// Last used timestamp.
     pub(crate) last_timestamp: usize,
+    /// Map from `tid` to a transaction result.
     pub(crate) done_xactions: HashMap<Uuid, anyhow::Result<Option<Table>>>,
+    /// Filename for durability.
     pub(crate) filename: String,
 }
 
 impl Repository {
+    /// Create a new `Repository`.
+    ///
+    /// # Example:
+    /// ```
+    /// let repo = Repository::new("db.txt");
+    /// ```
     pub fn new(filename: String) -> Self {
         Repository {
             database: Database::new(),
@@ -38,6 +53,9 @@ macro_rules! find_max {
 }
 
 impl Repository {
+    /// Single-Repository Transactions.
+    ///
+    /// Section 4.3. https://pmg.csail.mit.edu/papers/granola-usenix12.pdf
     fn handle_single(
         &mut self,
         tid: Uuid,
@@ -64,6 +82,10 @@ impl Repository {
         Ok(CommitVote::InProgress)
     }
 
+    /// Independent Distributed Transactions
+    ///
+    /// Section 4.4. https://pmg.csail.mit.edu/papers/granola-usenix12.pdf
+    /// Steps 1 and 2.
     fn handle_indep_prepare(
         &mut self,
         tid: Uuid,
@@ -90,6 +112,10 @@ impl Repository {
         vote
     }
 
+    /// Independent Distributed Transactions
+    ///
+    /// Section 4.4. https://pmg.csail.mit.edu/papers/granola-usenix12.pdf
+    /// Step 3.
     fn send_message_accept_indep_to_participants(
         &mut self,
         tid: Uuid,
@@ -105,6 +131,10 @@ impl Repository {
         Ok(CommitVote::InProgress)
     }
 
+    /// Independent Distributed Transactions
+    ///
+    /// Section 4.4. https://pmg.csail.mit.edu/papers/granola-usenix12.pdf
+    /// Step 4 to end.
     fn handle_indep_accept(
         &mut self,
         tid: Uuid,
@@ -131,7 +161,7 @@ impl Repository {
 
         if self.database.active_transactions.is_empty() {
             log::error!("Should not be here");
-            return Ok(CommitVote::InProgress);
+            return Ok(CommitVote::Abort);
         }
 
         self.database.decrement_reply_count(&tid);
@@ -146,6 +176,10 @@ impl Repository {
         Ok(CommitVote::InProgress)
     }
 
+    /// Coordinated Distributed Transactions
+    ///
+    /// Section 4.5. https://pmg.csail.mit.edu/papers/granola-usenix12.pdf
+    /// Steps 1, 2, 3.
     fn handle_coord_prepare(
         &mut self,
         tid: Uuid,
@@ -181,6 +215,10 @@ impl Repository {
         vote
     }
 
+    /// Coordinated Distributed Transactions
+    ///
+    /// Section 4.5. https://pmg.csail.mit.edu/papers/granola-usenix12.pdf
+    /// Step 4.
     fn send_message_accept_coord_to_participants(
         &mut self,
         tid: Uuid,
@@ -196,6 +234,10 @@ impl Repository {
         Ok(CommitVote::InProgress)
     }
 
+    /// Coordinated Distributed Transactions
+    ///
+    /// Section 4.5. https://pmg.csail.mit.edu/papers/granola-usenix12.pdf
+    /// Steps 5 to end.
     fn handle_coord_accept(
         &mut self,
         tid: Uuid,
@@ -222,7 +264,7 @@ impl Repository {
 
         if self.database.active_transactions.is_empty() {
             log::error!("Should not be here");
-            return Ok(CommitVote::InProgress);
+            return Ok(CommitVote::Abort);
         }
 
         self.database.decrement_reply_count(&tid);
@@ -251,6 +293,7 @@ impl Actor for Repository {
 impl Handler<MessagePrepare> for Repository {
     type Result = anyhow::Result<CommitVote, anyhow::Error>;
 
+    /// Handle for [`MessagePrepare`] for [`Repository`].
     fn handle(&mut self, msg: MessagePrepare, _ctx: &mut Self::Context) -> Self::Result {
         match msg {
             MessagePrepare::Single(tid, args) => self.handle_single(tid, args),
@@ -273,6 +316,7 @@ impl Handler<MessagePrepare> for Repository {
 impl Handler<MessageAccept> for Repository {
     type Result = anyhow::Result<CommitVote, anyhow::Error>;
 
+    /// Handle for [`MessageAccept`] for [`Repository`].
     fn handle(&mut self, msg: MessageAccept, _ctx: &mut Self::Context) -> Self::Result {
         match msg {
             MessageAccept::Indep(tid, proposed_ts, vote) => {
@@ -288,6 +332,10 @@ impl Handler<MessageAccept> for Repository {
 impl Handler<GetResult> for Repository {
     type Result = ResponseFuture<anyhow::Result<Option<Table>, anyhow::Error>>;
 
+    /// Handle for [`GetResult`] for [`Repository`].
+    /// If a result for the given `tid` is already in [`Repository::done_xaction`],
+    /// remove it and return the value. If not, send a `GetResult` for the actor
+    /// to try to get a result.
     fn handle(&mut self, msg: GetResult, ctx: &mut Self::Context) -> Self::Result {
         let tid = msg.0;
         if let Some(result) = self.done_xactions.remove(&tid) {
@@ -302,6 +350,8 @@ impl Handler<GetResult> for Repository {
 impl Handler<GetProposedTs> for Repository {
     type Result = usize;
 
+    /// Handle for [`GetProposedTs`] for [`Repository`].
+    /// Needed for [`RepositoryWs`].
     fn handle(&mut self, msg: GetProposedTs, _ctx: &mut Self::Context) -> Self::Result {
         self.database.get_proposed_ts_for_tid(&msg.0)
     }
