@@ -109,9 +109,9 @@ mod tests {
     ) -> (Addr<Repository>, Addr<Repository>) {
         let customer = Repository::new("customer".to_string()).start();
         let operations = vec![
-            Operation::Statement(Statement::Create(1, Box::new(Expr::Value((1, 1))))),
-            Operation::Statement(Statement::Create(2, Box::new(Expr::Value((2, 2))))),
-            Operation::Statement(Statement::Create(3, Box::new(Expr::Value((3, 3))))),
+            Operation::Statement(Statement::Create(1, Box::new(Expr::Value(Table(1, 1))))),
+            Operation::Statement(Statement::Create(2, Box::new(Expr::Value(Table(2, 2))))),
+            Operation::Statement(Statement::Create(3, Box::new(Expr::Value(Table(3, 3))))),
         ];
 
         let cust = single_repository_transaction(&customer.clone(), operations, runtime).await;
@@ -119,9 +119,9 @@ mod tests {
 
         let prod = Repository::new("product".to_string()).start();
         let operations = vec![
-            Operation::Statement(Statement::Create(0, Box::new(Expr::Value((4, 4))))),
-            Operation::Statement(Statement::Create(1, Box::new(Expr::Value((5, 5))))),
-            Operation::Statement(Statement::Create(2, Box::new(Expr::Value((6, 6))))),
+            Operation::Statement(Statement::Create(0, Box::new(Expr::Value(Table(4, 4))))),
+            Operation::Statement(Statement::Create(1, Box::new(Expr::Value(Table(5, 5))))),
+            Operation::Statement(Statement::Create(2, Box::new(Expr::Value(Table(6, 6))))),
         ];
         let resp = single_repository_transaction(&prod.clone(), operations, runtime).await;
         println!("Adding product info. Result: {:?}", resp);
@@ -180,7 +180,7 @@ mod tests {
         let operations = vec![
             vec![Operation::Statement(Statement::Update(
                 1,
-                Box::new(Expr::Value((1000, 1000))),
+                Box::new(Expr::Value(Table(1000, 1000))),
             ))],
             vec![Operation::Expr(Expr::Read(4))],
         ];
@@ -210,11 +210,11 @@ mod tests {
         let operations = vec![
             vec![Operation::Statement(Statement::Update(
                 1,
-                Box::new(Expr::Value((10, 10))),
+                Box::new(Expr::Value(Table(10, 10))),
             ))],
             vec![Operation::Statement(Statement::Update(
                 1,
-                Box::new(Expr::Value((40, 40))),
+                Box::new(Expr::Value(Table(40, 40))),
             ))],
         ];
 
@@ -234,8 +234,8 @@ mod tests {
 
         assert!(cust.is_ok());
         assert!(prod.is_ok());
-        assert_eq!(cust.unwrap(), Some((10, 10)));
-        assert_eq!(prod.unwrap(), Some((40, 40)));
+        assert_eq!(cust.unwrap(), Some(Table(10, 10)));
+        assert_eq!(prod.unwrap(), Some(Table(40, 40)));
         println!("Coordinated update succeeded.");
     }
 
@@ -247,10 +247,10 @@ mod tests {
         let operations = vec![
             vec![Operation::Statement(Statement::Update(
                 1,
-                Box::new(Expr::Value((10, 10))),
+                Box::new(Expr::Value(Table(10, 10))),
             ))],
             vec![
-                Operation::Statement(Statement::Update(1, Box::new(Expr::Value((40, 40))))),
+                Operation::Statement(Statement::Update(1, Box::new(Expr::Value(Table(40, 40))))),
                 // Should fail.
                 Operation::Expr(Expr::Read(5)),
             ],
@@ -272,8 +272,8 @@ mod tests {
 
         assert!(cust.is_ok());
         assert!(prod.is_ok());
-        assert_eq!(cust.unwrap(), Some((1, 1)));
-        assert_eq!(prod.unwrap(), Some((5, 5)));
+        assert_eq!(cust.unwrap(), Some(Table(1, 1)));
+        assert_eq!(prod.unwrap(), Some(Table(5, 5)));
         println!("Coordinated fail to update due to primary key violation.");
     }
 }

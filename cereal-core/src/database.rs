@@ -125,7 +125,9 @@ impl Database {
                             break;
                         }
                     }
-                    Operation::Expr(Expr::Value(_)) => (),
+                    Operation::Expr(Expr::Value(_))
+                    | Operation::Expr(Expr::Add(_, _))
+                    | Operation::Expr(Expr::Sub(_, _)) => (),
                 }
             }
         }
@@ -149,7 +151,9 @@ impl Database {
                     Operation::Expr(Expr::Delete(key)) => {
                         self.locked_keys.insert(*key);
                     }
-                    Operation::Expr(Expr::Value(_)) => (),
+                    Operation::Expr(Expr::Value(_))
+                    | Operation::Expr(Expr::Add(_, _))
+                    | Operation::Expr(Expr::Sub(_, _)) => (),
                 }
             }
         }
@@ -163,6 +167,7 @@ impl Database {
         match op {
             Operation::Statement(Statement::Create(key, expr)) => {
                 let value = Self::eval_operation(database, &Operation::Expr(*expr.to_owned()));
+                log::info!("{:?}", value);
                 database.insert(
                     key.to_owned(),
                     value.expect("eval_operation didn't return a valid `Table`."),
@@ -172,16 +177,27 @@ impl Database {
             Operation::Expr(Expr::Read(key)) => database.get(key).cloned(),
             Operation::Statement(Statement::Update(key, expr)) => {
                 let value = Self::eval_operation(database, &Operation::Expr(*expr.to_owned()));
+                log::info!("{:?}", value);
                 database
                     .entry(key.to_owned())
                     .and_modify(|v| {
-                        *v = value.expect("eval_operation didn't return a valid `Table`.")
+                        *v = value
+                            .clone()
+                            .expect("eval_operation didn't return a valid `Table`.")
                     })
-                    .or_insert(value?);
+                    .or_insert(value.clone()?);
                 value
             }
             Operation::Expr(Expr::Delete(key)) => database.remove(key),
-            Operation::Expr(Expr::Value(value)) => Some(*value),
+            Operation::Expr(Expr::Value(value)) => Some(value.clone()),
+            Operation::Expr(Expr::Add(expr, rhs)) => Some(
+                Self::eval_operation(database, &Operation::Expr(*expr.to_owned()))?
+                    + Self::eval_operation(database, &Operation::Expr(*rhs.to_owned()))?,
+            ),
+            Operation::Expr(Expr::Sub(expr, rhs)) => Some(
+                Self::eval_operation(database, &Operation::Expr(*expr.to_owned()))?
+                    - Self::eval_operation(database, &Operation::Expr(*rhs.to_owned()))?,
+            ),
         }
     }
 
@@ -194,7 +210,7 @@ impl Database {
             }
             self.finalize(tid, xaction.proposed_ts);
         }
-        *result.last()?
+        result.last()?.clone()
     }
 
     /// Run all `next available to run` transactions, by lowest timestamp and got all needed responses back.

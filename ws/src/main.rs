@@ -1,6 +1,11 @@
+// TODO: change all ws communications to `Binary` instead of `Text`.
+use std::net::Ipv4Addr;
+
 use actix::prelude::*;
-use actix_web::{http::Uri, web, App, Error, HttpRequest, HttpResponse, HttpServer};
-use actix_web_actors::ws::{self, WebsocketContext, Frame};
+use actix_web::{
+    web, App, Error, HttpRequest, HttpResponse, HttpServer,
+};
+use actix_web_actors::ws::{self, WebsocketContext};
 use clap::{Parser, Subcommand};
 use futures_util::{SinkExt as _, StreamExt as _};
 use log::{info, warn};
@@ -11,7 +16,13 @@ use cereal_core::{
     messages::{CommitVote, GetProposedTs, GetResult, MessageAccept, MessagePrepare},
     operations::{Arguments, Expr, Operation, Statement, Table},
     repository::Repository,
-    runtime::Runtime,
+};
+
+mod client;
+mod macros;
+use crate::{
+    client::*,
+    macros::{add, create, op, read, sub, update, value},
 };
 
 #[derive(Message, Debug, Serialize, Deserialize)]
@@ -61,15 +72,14 @@ pub enum MessageWs {
 }
 
 /// A Ws Wrapper of `Repository`.
+#[derive(Clone)]
 struct RepositoryWs {
-    repo_actor: Addr<Repository>,
+    repo_actor: web::Data<Addr<Repository>>,
 }
 
 impl RepositoryWs {
-    fn new(name: String) -> Self {
-        RepositoryWs {
-            repo_actor: Repository::new(name).start(),
-        }
+    fn new(repo_actor: web::Data<Addr<Repository>>) -> Self {
+        RepositoryWs { repo_actor }
     }
 }
 
@@ -142,7 +152,7 @@ impl RepositoryWs {
             .into_actor(self)
             .then(|res, _, ctx| {
                 let res: CommitVote = res.unwrap().unwrap();
-                info!("response indep: {:?}", res);
+                info!("response coord: {:?}", res);
                 let response = serde_json::to_string(&res)
                     .expect("Actor response is typed. So should never happend");
                 ctx.text(response);
@@ -167,13 +177,7 @@ impl RepositoryWs {
                 info!("proposed ts: {:?}", proposed_ts);
                 async move {
                     for participant in participants.iter() {
-                        let uri = Uri::builder()
-                            .authority(participant.clone())
-                            .scheme("http")
-                            .path_and_query("/ws/")
-                            .build()
-                            .unwrap();
-                        // TODO: loop over all participants
+                        let uri = participant;
                         let (_resp, mut connection) =
                             awc::Client::new().ws(uri).connect().await.unwrap();
 
@@ -217,13 +221,8 @@ impl RepositoryWs {
                 info!("proposed ts: {:?}", proposed_ts);
                 async move {
                     for participant in participants.iter() {
-                        let uri = Uri::builder()
-                            .authority(participant.clone())
-                            .scheme("http")
-                            .path_and_query("/ws/")
-                            .build()
-                            .unwrap();
-                        // TODO: loop over all participants
+                        log::info!("URI: {:?}", participant);
+                        let uri = participant;
                         let (_resp, mut connection) =
                             awc::Client::new().ws(uri).connect().await.unwrap();
 
@@ -395,7 +394,13 @@ impl StreamHandler<Result<ws::Message, ws::ProtocolError>> for RepositoryWs {
 }
 
 async fn index(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    ws::start(RepositoryWs::new("customer".to_string()), &req, stream)
+    println!("to aqui");
+
+    let repo = req.app_data::<web::Data<Addr<Repository>>>().unwrap();
+    //let repo = Repository::new("oi".to_string()).start();
+    //let repo = repo.lock().unwrap();
+    let repows = RepositoryWs::new(repo.clone());
+    ws::start(repows, &req, stream)
 }
 
 #[derive(Parser, Debug)]
@@ -412,8 +417,8 @@ enum Commands {
         #[arg(short, long)]
         port: u16,
     },
-    /// start a new client.
-    Client {
+    /// start a loosely inspired TPC-like testing.
+    TPCFake {
         #[arg(short, long)]
         customer_port: u16,
         #[arg(short, long)]
@@ -423,143 +428,51 @@ enum Commands {
     },
 }
 
-struct Client {}
-impl Client {
-    async fn send_order(self, order_port: u16, runtime: &mut Runtime) -> anyhow::Result<()> {
-        let uri = Uri::builder()
-            .authority(format!("127.0.0.1:{order_port}"))
-            .scheme("http")
-            .path_and_query("/ws/")
-            .build()
-            .unwrap();
+fn to_io_error(error: anyhow::Error) -> std::io::Error {
+    let context = format!("failed to send operations. {}", error);
+    std::io::Error::new(std::io::ErrorKind::Other, context)
+}
 
-        let (_resp, connection) = awc::Client::new().ws(uri).connect().await.unwrap();
-        let mut connection = connection.fuse();
+async fn create_order(
+    customer: &mut Client,
+    order: &mut Client,
+    product: &mut Client,
+) -> anyhow::Result<()> {
+    //loop {
+    let tid = Uuid::new_v4();
 
-        let operations = vec![
-            Operation::Statement(Statement::Create(0, Box::new(Expr::Value((1, 1))))),
-            Operation::Statement(Statement::Create(1, Box::new(Expr::Value((2, 2))))),
-            Operation::Statement(Statement::Create(2, Box::new(Expr::Value((3, 3))))),
-        ];
+    let operation_order = vec![create!(0, value!(Table(5, 5)))];
+    let operation_customer = vec![update!(0, add!(read!(0), value!(Table(1, 1))))];
+    let operation_product = vec![update!(0, sub!(read!(0), value!(Table(1, 1))))];
 
-        let tid = Uuid::new_v4();
-        let args = Arguments {
-            timestamp: runtime.now(),
-            operations,
-        };
+    let mut clients = Clients {
+        participants: vec![customer, order, product],
+    };
 
-        let msg = serde_json::to_string(&MessageWs::Single { tid, args })
-            .expect("this can be serialized");
+    let results = clients
+        .send_coord(
+            &tid,
+            vec![operation_customer, operation_order, operation_product],
+        )
+        .await;
 
-        connection
-            .send(ws::Message::Text(msg.into()))
-            .await
-            .unwrap();
+    log::info!("coord result: {:?}", results);
 
-        let res = connection.next().await.unwrap()?;
+    let op_read = vec![op!(read!(0))];
+    let tid = order.send_single(op_read.clone()).await?;
+    let result = order.get_result(&tid).await?;
+    println!("order result: {:?}", result);
 
-        print!("Result: {:?}", res);
+    let tid = customer.send_single(op_read.clone()).await?;
+    let result = customer.get_result(&tid).await?;
+    println!("customer result: {:?}", result);
 
-        let operations = vec![
-            Operation::Expr(Expr::Read(0)),
-        ];
+    let tid = product.send_single(op_read.clone()).await?;
+    let result = product.get_result(&tid).await?;
+    println!("product result: {:?}", result);
 
-        let tid = Uuid::new_v4();
-        let args = Arguments {
-            timestamp: runtime.now(),
-            operations,
-        };
-
-        let msg = serde_json::to_string(&MessageWs::Single { tid, args })
-            .expect("this can be serialized");
-
-        connection
-            .send(ws::Message::Text(msg.into()))
-            .await
-            .unwrap();
-        let res = connection.next().await.unwrap()?;
-
-        print!("Result: {:?}", res);
-
-        let msg = serde_json::to_string(&MessageWs::GetResult { tid } )
-            .expect("this can be serialized");
-
-        connection
-            .send(ws::Message::Text(msg.into()))
-            .await
-            .unwrap();
-        print!("Result: {:?}", res);
-
-        Ok(())
-    }
-
-    async fn send_customer(self, customer_port: u16, runtime: &mut Runtime) -> anyhow::Result<()> {
-        let uri = Uri::builder()
-            .authority(format!("127.0.0.1:{customer_port}"))
-            .scheme("http")
-            .path_and_query("/ws/")
-            .build()
-            .unwrap();
-
-        let (_resp, connection) = awc::Client::new().ws(uri).connect().await.unwrap();
-        let mut connection = connection.fuse();
-
-        let operations = vec![
-            Operation::Statement(Statement::Create(0, Box::new(Expr::Value((1, 1))))),
-            Operation::Statement(Statement::Create(1, Box::new(Expr::Value((2, 2))))),
-            Operation::Statement(Statement::Create(2, Box::new(Expr::Value((3, 3))))),
-        ];
-
-        let tid = Uuid::new_v4();
-        let args = Arguments {
-            timestamp: runtime.now(),
-            operations,
-        };
-
-        let msg = serde_json::to_string(&MessageWs::Single { tid, args })
-            .expect("this can be serialized");
-
-        connection
-            .send(ws::Message::Text(msg.into()))
-            .await
-            .unwrap();
-
-        let res = connection.next().await.unwrap()?;
-
-        print!("Result: {:?}", res);
-
-        let operations = vec![
-            Operation::Expr(Expr::Read(0)),
-        ];
-
-        let tid = Uuid::new_v4();
-        let args = Arguments {
-            timestamp: runtime.now(),
-            operations,
-        };
-
-        let msg = serde_json::to_string(&MessageWs::Single { tid, args })
-            .expect("this can be serialized");
-
-        connection
-            .send(ws::Message::Text(msg.into()))
-            .await
-            .unwrap();
-        let res = connection.next().await.unwrap()?;
-
-        print!("Result: {:?}", res);
-
-        let msg = serde_json::to_string(&MessageWs::GetResult { tid } )
-            .expect("this can be serialized");
-
-        connection
-            .send(ws::Message::Text(msg.into()))
-            .await
-            .unwrap();
-        print!("Result: {:?}", res);
-
-        Ok(())
-    }
+    Ok(())
+    //}
 }
 
 #[actix_web::main]
@@ -570,19 +483,45 @@ async fn main() -> std::io::Result<()> {
 
     match cli.command {
         Commands::Repository { port } => {
-            return HttpServer::new(|| App::new().route("/ws/", web::get().to(index)))
-                .bind(("127.0.0.1", port))?
-                .run()
-                .await
+            let repo_actor: web::Data<Addr<Repository>> =
+                web::Data::new(Repository::new(format!("repository-{port}")).start());
+            return HttpServer::new(move || {
+                App::new()
+                    .app_data(web::Data::clone(&repo_actor))
+                    .route("/ws/", web::get().to(index))
+            })
+            .bind(("127.0.0.1", port))?
+            .run()
+            .await;
         }
-        Commands::Client {
+        Commands::TPCFake {
             customer_port,
             order_port,
             product_port,
         } => {
-            let mut runtime = Runtime::new();
-            let _ = Client{}.send_customer(customer_port, &mut runtime).await;
-            let _ = Client{}.send_order(order_port, &mut runtime).await;
+            let operations = vec![
+                create!(0, value!(Table(10, 10))),
+                create!(1, value!(Table(20, 20))),
+                create!(2, value!(Table(30, 30))),
+                create!(3, value!(Table(40, 40))),
+            ];
+            let customer_builder = ClientBuilder::new(Ipv4Addr::new(127, 0, 0, 1), customer_port);
+            let mut customer = customer_builder.build().await;
+
+            let _tid = customer
+                .send_single(operations.clone())
+                .await
+                .map_err(to_io_error)?;
+
+            let product_builder = ClientBuilder::new(Ipv4Addr::new(127, 0, 0, 1), product_port);
+            let mut product = product_builder.build().await;
+
+            let _tid = product.send_single(operations).await.map_err(to_io_error)?;
+
+            let order_builder = ClientBuilder::new(Ipv4Addr::new(127, 0, 0, 1), order_port);
+            let mut order = order_builder.build().await;
+
+            let _ = create_order(&mut customer, &mut order, &mut product).await;
         }
     }
 
