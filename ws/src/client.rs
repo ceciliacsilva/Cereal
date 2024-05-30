@@ -99,19 +99,19 @@ pub(crate) struct Clients<'a> {
 }
 
 impl<'a> Clients<'a> {
-    // FIXME: change to be like coord
     pub(crate) async fn send_indep(
         &'a mut self,
         tid: &Uuid,
         operations: Vec<Vec<Operation>>,
-    ) -> anyhow::Result<Uuid> {
+    ) -> anyhow::Result<Vec<Table>> {
         let participants_len = self.participants.len();
-
         let participants_address: Vec<String> = self
             .participants
             .iter()
             .map(|p| p.uri.to_string())
             .collect();
+
+        let mut votes = vec![];
 
         for (participant, operations) in self.participants.iter_mut().zip(operations) {
             let args = Arguments {
@@ -135,7 +135,11 @@ impl<'a> Clients<'a> {
             let result = participant.connection.next().await.unwrap()?;
             let vote = decoder::frame_to_commit_vote(&result)?;
             log::info!("Result from {:?} indep: {:?}", tid, vote);
+            votes.push(vote);
+        }
 
+        for (participant, vote) in self.participants.iter_mut().zip(votes) {
+            log::debug!("participant: {:?}", participant.uri);
             let msg = serde_json::to_string(&MessageWs::IndepParticipants {
                 tid: *tid,
                 vote,
@@ -150,11 +154,17 @@ impl<'a> Clients<'a> {
                 .unwrap();
 
             let res = participant.connection.next().await.unwrap()?;
-            let vote = decoder::frame_to_commit_vote(&res)?;
-            log::info!("Result from {:?} indep participants: {:?}", tid, vote);
+            log::info!("Result from {:?} indep participants: {:?}", tid, res);
         }
 
-        Ok(*tid)
+        let mut results = vec![];
+        for participant in self.participants.iter_mut() {
+            let result = participant.get_result(&tid).await?;
+            log::debug!("`get_result` from indep, {:?}: {:?}", tid, result);
+            results.push(result);
+        }
+
+        Ok(results)
     }
 
     pub(crate) async fn send_coord(
@@ -216,11 +226,11 @@ impl<'a> Clients<'a> {
         }
 
         let mut results = vec![];
-        // for participant in self.participants.iter_mut() {
-        //     let result = participant.get_result(&tid).await?;
-        //     log::debug!("`get_result` from coord, {:?}: {:?}", tid, result);
-        //     results.push(result);
-        // }
+        for participant in self.participants.iter_mut() {
+            let result = participant.get_result(&tid).await?;
+            log::debug!("`get_result` from coord, {:?}: {:?}", tid, result);
+            results.push(result);
+        }
 
         Ok(results)
     }
