@@ -1,9 +1,10 @@
-//! A toy implementation of the [`Granola` Protocol](https://pmg.csail.mit.edu/pubs/granola-usenix12-abstract.html).
+//! A toy implementation of the
+//! [`Granola` Protocol](https://pmg.csail.mit.edu/pubs/granola-usenix12-abstract.html)
+//! using [actix::Actor] to abstract a `Repository` entity.
 //!
-//!     “Granola: Low-Overhead Distributed Transaction Coordination” by James Cowling and Barbara Liskov.
-//!     In Proceedings of the 2012 USENIX Annual Technical Conference, (Boston, MA, USA), June 2012, USENIX.
-//!
-//! Using [actix::Actor] to abstract a `Repository` entity.
+//! -------
+//! _"Granola: Low-Overhead Distributed Transaction Coordination" by James Cowling and Barbara Liskov.
+//! In Proceedings of the 2012 USENIX Annual Technical Conference, (Boston, MA, USA), June 2012, USENIX._
 
 /// A simple [`Database`] implementation.
 mod database;

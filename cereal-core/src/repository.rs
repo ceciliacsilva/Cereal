@@ -32,7 +32,9 @@ impl Repository {
     ///
     /// # Example:
     /// ```
-    /// let repo = Repository::new("db.txt");
+    /// use cereal_core::repository::Repository;
+    ///
+    /// let repo = Repository::new("db.txt".to_string());
     /// ```
     pub fn new(filename: String) -> Self {
         Repository {

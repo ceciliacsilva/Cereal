@@ -320,9 +320,9 @@ mod tests {
     #[test]
     fn test_run_nexts() {
         let mut database = Database::new();
-        database.data_structure.insert(0, (0, 0));
-        database.data_structure.insert(1, (1, 1));
-        database.data_structure.insert(2, (2, 2));
+        database.data_structure.insert(0, Table(0, 0));
+        database.data_structure.insert(1, Table(1, 1));
+        database.data_structure.insert(2, Table(2, 2));
 
         let participants_len = 0;
         let tid_0 = Uuid::new_v4();
@@ -348,15 +348,15 @@ mod tests {
         );
 
         let result = database.run_nexts();
-        assert_eq!(result.get(&tid_0), Some(&Some((0, 0))));
-        assert_eq!(result.get(&tid_1), Some(&Some((1, 1))));
-        assert_eq!(result.get(&tid_2), Some(&Some((2, 2))));
+        assert_eq!(result.get(&tid_0), Some(&Some(Table(0, 0))));
+        assert_eq!(result.get(&tid_1), Some(&Some(Table(1, 1))));
+        assert_eq!(result.get(&tid_2), Some(&Some(Table(2, 2))));
     }
 
     #[test]
     fn get_all_locks() {
         let mut database = Database::new();
-        database.data_structure.insert(0, (0, 0));
+        database.data_structure.insert(0, Table(0, 0));
 
         let participants_len = 0;
         let tid = Uuid::new_v4();
