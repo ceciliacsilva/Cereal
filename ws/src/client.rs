@@ -1,3 +1,8 @@
+//! A Client for `RepositoryWS`.
+//!
+//! With:
+//! - [`Client`] to handle `single repository` transactions and;
+//! - [`Clients`] to manipulate `multi repository` transactions.
 use futures_util::{SinkExt as _, StreamExt as _};
 use std::net::Ipv4Addr;
 
@@ -11,6 +16,9 @@ use uuid::Uuid;
 
 use crate::MessageWs;
 
+/// ClientBuilder.
+///
+/// A auxiliary Type to build `RepositoryWs` connections.
 #[derive(Debug)]
 pub(crate) struct ClientBuilder {
     uri: Uri,
@@ -18,6 +26,9 @@ pub(crate) struct ClientBuilder {
 }
 
 impl ClientBuilder {
+    /// ClientBuilder::new.
+    ///
+    /// Creates a [ClientBuilder] from a `ip` and `port`.
     pub(crate) fn new(ip: Ipv4Addr, port: u16) -> Self {
         let uri = Uri::builder()
             .authority(format!("{ip}:{port}"))
@@ -31,6 +42,7 @@ impl ClientBuilder {
         ClientBuilder { uri, runtime }
     }
 
+    /// Create a [Client] `build`ing a the current [ClientBuilder].
     pub(crate) async fn build(self) -> Client {
         let (_resp, connection) = awc::Client::new()
             .ws(self.uri.clone())
@@ -46,6 +58,9 @@ impl ClientBuilder {
     }
 }
 
+/// Client.
+///
+/// Holds a WebSocket `connection`.
 pub(crate) struct Client {
     connection: actix_codec::Framed<awc::BoxedSocket, awc::ws::Codec>,
     runtime: Runtime,
@@ -53,6 +68,7 @@ pub(crate) struct Client {
 }
 
 impl Client {
+    /// Sends operations to a single repository as a `single repository transaction`.
     pub(crate) async fn send_single(
         &mut self,
         operations: Vec<Operation>,
@@ -78,6 +94,8 @@ impl Client {
         self.get_result(&tid).await
     }
 
+    /// Sends a `GetResult` message to a `repository` asking to the result of
+    /// transaction with the given `tid`.
     async fn get_result(&mut self, tid: &Uuid) -> anyhow::Result<Option<Table>> {
         let msg = serde_json::to_string(&MessageWs::GetResult { tid: *tid })
             .expect("this can be serialized");
@@ -98,11 +116,15 @@ impl Client {
 }
 
 /// For multi-repository transactions.
+///
+/// Holds a [std::vec::Vec] with a list of [Client] s that will
+/// participate in a `multi repository transaction`.
 pub(crate) struct Clients<'a> {
     pub(crate) participants: Vec<&'a mut Client>,
 }
 
 impl<'a> Clients<'a> {
+    /// Sends the needed messages for all the participants of a `independent` transaction.
     pub(crate) async fn send_indep(
         &'a mut self,
         operations: Vec<Vec<Operation>>,
@@ -171,6 +193,7 @@ impl<'a> Clients<'a> {
         Ok(results)
     }
 
+    /// Sends the needed messages for a `coordinated` transaction.
     pub(crate) async fn send_coord(
         &'a mut self,
         operations: Vec<Vec<Operation>>,
@@ -240,6 +263,9 @@ impl<'a> Clients<'a> {
     }
 }
 
+// TODO: this deserves a better implementation.
+//
+// It's very easy to encode/decode messages in the wrong way.
 mod decoder {
     use actix_web_actors::ws::Frame;
     use awc::ws;
@@ -248,6 +274,7 @@ mod decoder {
 
     use crate::GetResultResponse;
 
+    /// Try to decode a `Frame` as a [cereal_core::messages::CommitVote].
     pub(crate) fn frame_to_commit_vote(frame: &Frame) -> anyhow::Result<CommitVote> {
         let vote = match frame {
             ws::Frame::Text(text) => Ok(text),
@@ -261,6 +288,7 @@ mod decoder {
         vote.and_then(|vote| Ok(serde_json::from_str(str::from_utf8(&vote)?)?))
     }
 
+    /// Try to decode a `Frame` as a [cereal_core::operations::Table].
     pub(crate) fn frame_to_table(frame: &Frame) -> anyhow::Result<Option<Table>> {
         let vote: anyhow::Result<&actix_web::web::Bytes> = match frame {
             ws::Frame::Text(text) => Ok(text),
@@ -276,7 +304,7 @@ mod decoder {
                 &vote,
             )?)?)
         })?;
-        log::trace!("{:?}", err_or_table);
+        log::debug!("{:?}", err_or_table);
         match err_or_table {
             GetResultResponse::Ok(table) => Ok(table),
             GetResultResponse::Err(err) => anyhow::bail!(err),

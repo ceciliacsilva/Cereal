@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::GetResultResponse;
 
+/// A `network` wrap over [cereal_core::message].
 #[derive(Message, Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
 #[rtype(result = "Result<CommitVote, anyhow::Error>")]
@@ -65,6 +66,7 @@ pub(crate) struct RepositoryWs {
 }
 
 impl RepositoryWs {
+    /// Create a new `Repository` using a `Arc` of `Repository`.
     pub(crate) fn new(repo_actor: web::Data<Addr<Repository>>) -> Self {
         RepositoryWs { repo_actor }
     }
@@ -152,7 +154,7 @@ impl RepositoryWs {
             .wait(ctx);
     }
 
-    // TODO: don't like this.
+    // TODO: Ideally this should be better because it leaks details over the protocol.
     fn send_prepare_indep_accept(
         &self,
         tid: Uuid,
