@@ -1,0 +1,51 @@
+#+title: Readme
+
+* Cereal
+
+This repository is a toy implementation of the [[https://pmg.csail.mit.edu/pubs/granola-usenix12-abstract.html][Granola protocol]], using [[https://actix.rs/][actix]] web
+framework.
+
+#+begin_quote
+“Granola: Low-Overhead Distributed Transaction Coordination” by James Cowling and Barbara Liskov.
+In Proceedings of the 2012 USENIX Annual Technical Conference, (Boston, MA, USA), June 2012, USENIX.
+#+end_quote
+
+This project was divided into two crates:
+
+- The ~cereal-core~ handles the implementation of single-node ~Repositories~
+  and,
+- ~ws~ implements a WebSocket connection layer (~RepositoryWs~) on top of
+ ~Repository~ to simulate the distributed nature of the protocol.
+
+** Core
+
+The ~Repository~ (basic data storage unit) were built using [[https://github.com/actix/actix?tab=readme-ov-file#actix][actix_actor]] to
+simplify the overall implementation. ~Actor~ s accept asynchronous messages
+adding them to a ~Mailbox~ but executing them in a single-threaded manner
+simplifies ~concurrency control~. Thus, the internal ~Repository~ is very simple
+data structure used to emulate the behavior of a professional DBMS.
+
+A ~Repository~ response to ~messages~ defined in the file [[https://github.com/ceciliacsilva/Cereal/tree/main/cereal-core/src/messages.rs][messages.rs]] and are
+my translation of the interface described in the paper.
+
+** Ws
+
+The ~ws~ project adds a network layer to the ~Repository~ (the ~RepositoryWs~).
+A each Repository created here (with ~cargo run --bin ws -- repository -p 8082~)
+is a ~actix_web::HttpServer~, with a shared ~Repository~ (from [[*Core][Core]]). Each
+~request~ to ~/ws/~ initialize a ~RepositoryWs~ - a WebSocket connection
+(WebSocket ~handshake~) - used to interact with this repositories over the
+network.
+
+There is also a small test to show how an application would be built using the
+primitives offered by the Repositories. ~tcp-fake~, which takes inspiration from
+the application described in the paper and the popular DBMs bench suite [[https://www.tpc.org/][tpc-c]],
+command expects that the ports where 3 repositories are located are sent:
+~customer~, ~order~ and ~product~. And it offers 3 operation options:
+
+- ~start~: which initializes/populates the ~customer~ and ~product~ repositories
+  with values ​​for the test.
+- ~buyer~: which simulates purchase operations, removing item from ~product~ and
+  adding to ~customer~ using ~coord transactions~ to do so.
+- ~management~: which simulates a management application checking stock and
+  orders are consistent with expectations.
