@@ -18,7 +18,7 @@ This project was divided into two crates:
 There is a lot of room for improvement here. Error handling is very primitive
 and many structures and implementations are quite simplistic. `Table`s are fixed
 and the same for all repositories. Modules could be better thought out and
-divided.
+divided. Missing tracing.
 
 ** Core
 
@@ -52,3 +52,46 @@ command expects that the ports where 3 repositories are located are sent:
   adding to ~customer~ using ~coord transactions~ to do so.
 - ~management~: which simulates a management application checking stock and
   orders are consistent with expectations.
+
+*** Usage
+
+**** Repositories
+
+- Run in a terminal:
+
+#+begin_src shell
+cargo run --bin ws -- repository -p 8080
+#+end_src
+
+- Run in another terminal:
+
+#+begin_src shell
+cargo run --bin ws -- repository -p 8081
+#+end_src
+
+
+- Run in another terminal:
+
+#+begin_src shell
+cargo run --bin ws -- repository -p 8081
+#+end_src
+
+**** Test
+- Run in a terminal:
+
+#+begin_src shell
+cargo run --bin ws -- tpc-fake --customer-port 8080 --product-port 8081 --order-port 8082 start
+#+end_src
+
+- Then start the ~buyer~ s:
+
+#+begin_src shell
+cargo run --bin ws -- tpc-fake --customer-port 8080 --product-port 8081 --order-port 8082 buyer
+#+end_src
+
+
+- In another terminal, start the ~management~ client:
+
+#+begin_src shell
+cargo run --bin ws -- tpc-fake --customer-port 8080 --product-port 8081 --order-port 8082 management
+#+end_src
