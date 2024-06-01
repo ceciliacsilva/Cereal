@@ -73,7 +73,7 @@ cargo run --bin ws -- repository -p 8081
 - Run in another terminal:
 
 #+begin_src shell
-cargo run --bin ws -- repository -p 8081
+cargo run --bin ws -- repository -p 8082
 #+end_src
 
 **** Test
